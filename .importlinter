@@ -25,6 +25,7 @@ layers =
     openedx_learning
 
     # Content (authoring-side models and APIs) and Catalog (CatalogCourse/CourseRun) as siblings
+    openedx_content | openedx_catalog
 
     # Tagging is very simple & fundamental. Should probably not depend on any other Django apps.
     openedx_tagging
