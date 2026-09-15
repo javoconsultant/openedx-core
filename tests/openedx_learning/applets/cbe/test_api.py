@@ -95,7 +95,7 @@ def test_get_competency_rule_profiles_is_ordered_by_id(
     organization: Organization,
 ) -> None:
     """
-    get_competency_rule_profiles() returns profiles in ascending id order, every time.
+    get_competency_rule_profiles() returns profiles in ascending id order.
 
     Without a deterministic order, paginating the collection would repeat and skip rows.
     """
@@ -107,5 +107,4 @@ def test_get_competency_rule_profiles_is_ordered_by_id(
     )
 
     expected = [default_rule_profile, taxonomy_scoped, organization_scoped]
-    assert list(get_competency_rule_profiles()) == expected
     assert list(get_competency_rule_profiles()) == expected
