@@ -24,14 +24,17 @@ from ...api import (
     CompetencyCriterionArchivedError,
     associate_competency_criterion,
     bulk_update_competency_criteria,
+    get_competency_criteria_tree,
     get_competency_rule_profiles,
     resolve_competency_tag,
 )
 from ...models import CompetencyCriteriaGroup, CompetencyRuleProfile
 from ..paginators import CompetencyRuleProfilePagination
-from .permissions import CompetencyRuleProfilePermissions
+from .permissions import CompetencyReadPermission, CompetencyRuleProfilePermissions
 from .serializers import (
+    CompetencyCriteriaGroupSerializer,
     CompetencyCriterionBulkUpdateSerializer,
+    CompetencyCriterionReadSerializer,
     CompetencyCriterionSerializer,
     CompetencyRuleProfileSerializer,
 )
@@ -161,3 +164,30 @@ class CompetencyCriterionBulkUpdateView(generics.GenericAPIView):
         except CompetencyCriterionArchivedError as exc:
             raise CompetencyCriteriaConflict(str(exc)) from exc
         return Response(CompetencyCriterionSerializer(criteria, many=True).data, status=status.HTTP_200_OK)
+
+
+class CompetencyCriteriaTreeView(generics.GenericAPIView):
+    """
+    GET-only. Return a competency's full non-archived CompetencyCriteriaGroup tree and CompetencyCriterion leaves.
+
+    Returned as two flat lists (groups, criteria), each carrying its own parent_id /
+    competency_criteria_group_id for client-side reconstruction. An empty tree (the tag exists
+    but nothing has been authored under it yet) is a valid 200 with two empty arrays; a 404 is
+    reserved for tag resolution failure only.
+    """
+
+    authentication_classes = (JwtAuthentication, SessionAuthenticationAllowInactiveUser)
+    permission_classes = [CompetencyReadPermission]
+
+    def get(self, request, tag_id):
+        """Resolve the competency tag, check read access, then return its criteria tree."""
+        try:
+            tag = resolve_competency_tag(tag_id)
+        except Tag.DoesNotExist as exc:
+            raise NotFound() from exc
+        self.check_object_permissions(request, tag)
+        tree = get_competency_criteria_tree(tag.id)
+        return Response({
+            "groups": CompetencyCriteriaGroupSerializer(tree.groups, many=True).data,
+            "criteria": CompetencyCriterionReadSerializer(tree.criteria, many=True).data,
+        })
