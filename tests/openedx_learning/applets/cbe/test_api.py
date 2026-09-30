@@ -16,6 +16,7 @@ from rules.permissions import permissions as rule_permissions
 
 from openedx_catalog.models import CatalogCourse, CourseRun
 from openedx_learning.api import (
+    CompetencyCriterionArchivedError,
     associate_competency_criterion,
     bulk_update_competency_criteria,
     create_leaf_group,
@@ -777,6 +778,23 @@ def test_bulk_update_404s_for_a_group_that_does_not_exist(
     """An unknown group id is a missing resource."""
     with pytest.raises(Http404):
         bulk_update_competency_criteria([c.id for c in batch], 999999, user=user, **NEW_RULE)
+
+
+def test_bulk_update_refuses_the_whole_batch_if_any_criterion_is_archived(
+    batch: tuple[CompetencyCriterion, CompetencyCriterion],
+    leaf: CompetencyCriteriaGroup,
+    user: UserType,
+    default_rule_profile: CompetencyRuleProfile,
+) -> None:
+    """One archived criterion refuses the whole batch, and nothing changes, not even the valid criteria."""
+    archived = make_criterion(leaf, "p3", rule_profile=default_rule_profile, archived=True)
+    criteria = [batch[0], archived, batch[1]]
+    before = snapshot(criteria)
+
+    with pytest.raises(CompetencyCriterionArchivedError, match=str(archived.id)):
+        bulk_update_competency_criteria([c.id for c in criteria], leaf.id, user=user, **NEW_RULE)
+
+    assert snapshot(criteria) == before
 
 
 @pytest.mark.parametrize("level", ["root", "course-level"])

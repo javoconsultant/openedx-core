@@ -21,6 +21,7 @@ from openedx_tagging.rules import ObjectTagPermissionItem, UserType
 from .models import CompetencyCriteriaGroup, CompetencyCriterion, CompetencyRuleProfile, LogicOperator
 
 __all__ = [
+    "CompetencyCriterionArchivedError",
     "associate_competency_criterion",
     "bulk_update_competency_criteria",
     "create_competency_criterion",
@@ -31,6 +32,12 @@ __all__ = [
     "resolve_supplied_leaf_group",
     "select_competency_taxonomies",
 ]
+
+
+class CompetencyCriterionArchivedError(Exception):
+    """
+    Raised when a request would edit a CompetencyCriterion that has been archived.
+    """
 
 
 def get_competency_rule_profiles() -> QuerySet[CompetencyRuleProfile]:
@@ -376,7 +383,8 @@ def bulk_update_competency_criteria(
     Returns the named criteria in request order. Raises PermissionDenied if ``user`` fails
     ``oel_tagging.can_tag_object`` for the group's taxonomy and course, Http404 if the group or a
     named criterion doesn't resolve, and ValidationError, keyed by the REST field names, for a
-    non-leaf group, an empty or repeated id list, or an invalid rule source.
+    non-leaf group, an empty or repeated id list, or an invalid rule source. Raises
+    CompetencyCriterionArchivedError if any named criterion is archived.
     """
     with transaction.atomic():
         group = get_object_or_404(
@@ -402,8 +410,14 @@ def bulk_update_competency_criteria(
         if len(criteria_by_id) != len(criterion_ids):
             raise Http404("Not every criterion_id names a criterion in this group.")
 
-        # TODO(#716): refuse the whole batch (409) if any named criterion is archived, once
-        # CompetencyCriterion carries the ``archived`` field.
+        # One archived criterion refuses the whole batch: ADR 0002 Decision 4 closes archived criteria to authoring.
+        archived_ids = [criterion_id for criterion_id in criterion_ids if criteria_by_id[criterion_id].archived]
+        if archived_ids:
+            raise CompetencyCriterionArchivedError(
+                _("Archived criteria cannot be edited: {criterion_ids}.").format(
+                    criterion_ids=", ".join(str(criterion_id) for criterion_id in archived_ids)
+                )
+            )
 
         criteria = [criteria_by_id[criterion_id] for criterion_id in criterion_ids]
         for criterion in criteria:

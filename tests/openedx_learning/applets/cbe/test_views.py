@@ -856,6 +856,26 @@ def test_bulk_update_on_a_group_that_does_not_exist_is_404(
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
+def test_bulk_update_naming_an_archived_criterion_is_409(
+    user_client: APIClient,
+    batch: tuple[CompetencyCriterion, CompetencyCriterion],
+    leaf: CompetencyCriteriaGroup,
+    default_rule_profile: CompetencyRuleProfile,
+) -> None:
+    """One archived criterion refuses the whole batch with a 409 naming it, and nothing changes."""
+    archived = make_criterion(leaf, "p3", rule_profile=default_rule_profile, archived=True)
+    criteria = [batch[0], archived, batch[1]]
+    before = stored_rules(criteria)
+
+    response = user_client.patch(
+        bulk_update_url(leaf.id), {"criterion_ids": [c.id for c in criteria], **NEW_RULE}, format="json",
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert str(archived.id) in response.data["detail"]
+    assert stored_rules(criteria) == before
+
+
 def test_bulk_update_without_permission_on_the_groups_course_is_403(
     user_client: APIClient, tag: Tag, organization: Organization, default_rule_profile: CompetencyRuleProfile,
 ) -> None:

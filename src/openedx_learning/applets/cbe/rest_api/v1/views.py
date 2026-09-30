@@ -5,12 +5,13 @@ from __future__ import annotations
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import QuerySet
+from django.utils.translation import gettext_lazy as _
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication  # type: ignore[import]
 from edx_rest_framework_extensions.auth.session.authentication import (  # type: ignore[import]
     SessionAuthenticationAllowInactiveUser,
 )
 from rest_framework import generics, mixins, status
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -19,6 +20,7 @@ from rest_framework.viewsets import GenericViewSet
 from openedx_tagging.rules import ObjectTagPermissionItem
 
 from ...api import (
+    CompetencyCriterionArchivedError,
     associate_competency_criterion,
     bulk_update_competency_criteria,
     get_competency_rule_profiles,
@@ -118,6 +120,12 @@ class CompetencyCriterionCreateView(generics.CreateAPIView):
         return Response(self.get_serializer(criterion).data, status=status.HTTP_201_CREATED)
 
 
+class CompetencyCriteriaConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = _("The request conflicts with the current state of the named criteria.")
+    default_code = "conflict"
+
+
 class CompetencyCriterionBulkUpdateView(generics.GenericAPIView):
     """
     PATCH-only. Apply one rule to a named batch of CompetencyCriteria in one leaf group, atomically.
@@ -128,7 +136,8 @@ class CompetencyCriterionBulkUpdateView(generics.GenericAPIView):
     stored, in request order, including any the update left unchanged.
 
     A thin adapter: :func:`bulk_update_competency_criteria` owns every semantic refusal, the
-    permission check included, so an in-process caller gets the same refusals.
+    permission check included, so an in-process caller gets the same refusals. A batch naming an
+    archived criterion is refused whole with 409.
     """
 
     serializer_class = CompetencyCriterionBulkUpdateSerializer
@@ -152,4 +161,6 @@ class CompetencyCriterionBulkUpdateView(generics.GenericAPIView):
             )
         except DjangoValidationError as exc:
             raise DRFValidationError(exc.message_dict if hasattr(exc, "message_dict") else exc.messages) from exc
+        except CompetencyCriterionArchivedError as exc:
+            raise CompetencyCriteriaConflict(str(exc)) from exc
         return Response(CompetencyCriterionSerializer(criteria, many=True).data, status=status.HTTP_200_OK)
