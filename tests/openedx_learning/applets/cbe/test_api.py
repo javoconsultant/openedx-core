@@ -9,8 +9,10 @@ import rules
 from django.apps import apps
 from django.contrib.auth.models import User as UserType  # pylint: disable=imported-auth-user
 from django.core.exceptions import NON_FIELD_ERRORS, PermissionDenied, ValidationError
+from django.db import connection
 from django.db.utils import IntegrityError
 from django.http import Http404
+from django.test.utils import CaptureQueriesContext
 from organizations.models import Organization
 from rules.permissions import permissions as rule_permissions
 
@@ -590,9 +592,25 @@ def test_the_profile_applicable_to_a_criterion_is_the_system_default(
     batch: tuple[CompetencyCriterion, CompetencyCriterion], default_rule_profile: CompetencyRuleProfile,
 ) -> None:
     """In this phase every criterion resolves to the system default, the only profile there is."""
+    system_default = cbe_api._get_system_default_rule_profile()  # pylint: disable=protected-access
     resolve = cbe_api._resolve_applicable_rule_profile  # pylint: disable=protected-access
+    assert system_default == default_rule_profile
     for criterion in batch:
-        assert resolve(criterion) == default_rule_profile
+        assert resolve(criterion, system_default) == default_rule_profile
+
+
+def test_bulk_update_looks_up_the_applicable_profile_once_per_batch(
+    leaf: CompetencyCriteriaGroup, user: UserType, default_rule_profile: CompetencyRuleProfile,
+) -> None:
+    """However many criteria a batch names, comparing override values against the default reads it once."""
+    criteria = [make_criterion(leaf, f"p{n}", rule_profile=default_rule_profile) for n in range(5)]
+    profile_table = CompetencyRuleProfile._meta.db_table
+
+    with CaptureQueriesContext(connection) as queries:
+        bulk_update_competency_criteria([c.id for c in criteria], leaf.id, user=user, **NEW_RULE)
+
+    profile_reads = [q for q in queries.captured_queries if q["sql"].startswith("SELECT") and profile_table in q["sql"]]
+    assert len(profile_reads) == 1
 
 
 def test_bulk_update_values_that_match_the_default_return_the_criterion_to_it(
@@ -637,7 +655,9 @@ def test_bulk_update_decides_a_return_to_a_profile_per_criterion(  # pylint: dis
         rule_type=RuleType.GRADE, rule_payload=NEW_PAYLOAD, competency_taxonomy=competency_taxonomy,
     )
     applicable = {first.id: matching, second.id: default_rule_profile}
-    monkeypatch.setattr(cbe_api, "_resolve_applicable_rule_profile", lambda criterion: applicable[criterion.id])
+    monkeypatch.setattr(
+        cbe_api, "_resolve_applicable_rule_profile", lambda criterion, system_default: applicable[criterion.id],
+    )
 
     bulk_update_competency_criteria([first.id, second.id], leaf.id, user=user, **NEW_RULE)
 

@@ -260,16 +260,9 @@ def associate_competency_criterion(
         )
 
 
-def _resolve_applicable_rule_profile(
-    criterion: CompetencyCriterion,  # pylint: disable=unused-argument
-) -> CompetencyRuleProfile | None:
+def _get_system_default_rule_profile() -> CompetencyRuleProfile | None:
     """
-    Return the profile ADR-0002 Decision 4's assignment table gives ``criterion``, or None.
-
-    A stand-in for the shared resolution helper #679 owns. Only the system default exists in this
-    phase, so every criterion resolves to it, or to None once it has been archived. Callers still
-    ask per criterion rather than once per batch: once scoped profiles exist, two criteria in the
-    same group need not resolve to the same one.
+    Return the system-default profile, or None once it has been archived.
     """
     return CompetencyRuleProfile.objects.filter(
         organization__isnull=True,
@@ -277,6 +270,21 @@ def _resolve_applicable_rule_profile(
         competency_taxonomy__isnull=True,
         archived=False,
     ).first()
+
+
+def _resolve_applicable_rule_profile(
+    criterion: CompetencyCriterion,  # pylint: disable=unused-argument
+    system_default: CompetencyRuleProfile | None,
+) -> CompetencyRuleProfile | None:
+    """
+    Return the profile ADR-0002 Decision 4's assignment table gives ``criterion``, or None.
+
+    A stand-in for the shared resolution helper #679 owns. Only the system default exists in this
+    phase, so every criterion resolves to ``system_default``, which the caller looks up once per
+    batch so a large batch costs no extra queries. Callers still ask per criterion: once scoped
+    profiles exist, two criteria in the same group need not resolve to the same one.
+    """
+    return system_default
 
 
 def _validate_rule_source(
@@ -330,6 +338,8 @@ def _apply_rule_source(
     rule_type_override: str | None,
     rule_payload_override: dict | None,
     user: UserType,
+    *,
+    system_default: CompetencyRuleProfile | None,
 ) -> None:
     """
     Point ``criterion`` at ``profile``, or give it the override values, saving only if that changes it.
@@ -339,7 +349,7 @@ def _apply_rule_source(
     row never records both a profile and overrides, or neither.
     """
     if profile is None:
-        applicable = _resolve_applicable_rule_profile(criterion)
+        applicable = _resolve_applicable_rule_profile(criterion, system_default)
         # Compares the parsed rule, never stored JSON text, so key order and formatting don't matter.
         if (
             applicable is not None
@@ -419,7 +429,11 @@ def bulk_update_competency_criteria(
                 )
             )
 
+        # Looked up once for the whole batch, and only when override values need comparing against it.
+        system_default = _get_system_default_rule_profile() if profile is None else None
         criteria = [criteria_by_id[criterion_id] for criterion_id in criterion_ids]
         for criterion in criteria:
-            _apply_rule_source(criterion, profile, rule_type_override, rule_payload_override, user)
+            _apply_rule_source(
+                criterion, profile, rule_type_override, rule_payload_override, user, system_default=system_default,
+            )
         return criteria

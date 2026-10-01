@@ -88,8 +88,7 @@ class CompetencyCriterionSerializer(serializers.ModelSerializer):
 
 class CompetencyCriterionBulkUpdateSerializer(serializers.Serializer):  # pylint: disable=abstract-method
     """
-    Parses the bulk-update request body, checking only the shape of each field and rejecting
-    unrecognized keys.
+    Parse the bulk-update request body, checking only each field's shape and rejecting unknown keys.
     """
 
     criterion_ids = serializers.ListField(child=serializers.IntegerField())
@@ -98,6 +97,9 @@ class CompetencyCriterionBulkUpdateSerializer(serializers.Serializer):  # pylint
     rule_payload_override = serializers.JSONField(required=False, allow_null=True)
 
     def validate(self, attrs: dict) -> dict:
+        """
+        Reject any top-level key this serializer does not declare.
+        """
         unrecognized = sorted(set(self.initial_data) - set(self.fields))
         if unrecognized:
             raise serializers.ValidationError({key: "This field is not recognized." for key in unrecognized})
