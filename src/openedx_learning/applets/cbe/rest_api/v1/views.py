@@ -161,19 +161,9 @@ class CompetencyCriteriaGroupDetailView(generics.GenericAPIView):
         PATCH api/cbe/v1/competencies/<tag_id>/criteria-groups/<group_id>/
         ``{"logic_operator": "AND"}``
 
-    **Returns**
-        * 200 - The group as stored, in the criteria-tree endpoint's shape. This includes a request
-          that changed nothing.
-        * 400 - ``logic_operator`` is missing, null, or not AND/OR; a key is unrecognized; a fixed
-          field differs from what is stored; or the group is a root
-        * 401 - Caller could not be identified
-        * 403 - Caller fails ``oel_tagging.can_tag_object`` for the group's taxonomy and course
-        * 404 - No group has ``group_id`` under the competency ``tag_id``
-        * 409 - The group is archived
-
-    ``logic_operator`` is the only editable field. The body may also repeat any other field the
-    group's representation carries, so a client can send back what it read, as long as each one
-    matches what is stored.
+    The response is the group as stored, in the criteria-tree endpoint's shape. ``logic_operator``
+    is the only editable field. The body may also repeat any other field the group's representation
+    carries, so a client can send back what it read, as long as each one matches what is stored.
 
     A thin adapter: :func:`update_competency_criteria_group` makes every other refusal, including
     the permission check, so an in-process caller is refused in the same cases. The body's fixed
