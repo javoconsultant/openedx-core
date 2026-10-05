@@ -28,7 +28,7 @@ from openedx_learning.models import (
     LogicOperator,
     RuleType,
 )
-from openedx_tagging.models import Tag, Taxonomy
+from openedx_tagging.models import ObjectTag, Tag, Taxonomy
 
 pytestmark = pytest.mark.django_db
 
@@ -432,6 +432,37 @@ def test_associate_competency_criterion_rejects_a_duplicate_tag_object_associati
 
     with pytest.raises(ValidationError, match="object_id"):
         associate_competency_criterion(tag_id=tag.id, object_id=object_id)
+
+
+@pytest.mark.parametrize("supply_group_id", [True, False])
+def test_associate_competency_criterion_locks_the_tag_row_before_the_duplicate_check(
+    tag: Tag, course_run: CourseRun, supply_group_id: bool
+) -> None:
+    """
+    The tag row lock is taken before the duplicate check, so two concurrent requests can't both pass it.
+
+    The order is asserted because a real concurrency test isn't practical.
+    """
+    group_id = create_leaf_group(tag, course_run).id if supply_group_id else None
+    events: list[str] = []
+    real_tag_lock = Tag.objects.select_for_update
+    real_object_tag_lock = ObjectTag.objects.select_for_update
+
+    def record_tag_lock(*args, **kwargs):
+        events.append("tag lock")
+        return real_tag_lock(*args, **kwargs)
+
+    def record_duplicate_check(*args, **kwargs):
+        events.append("duplicate check")
+        return real_object_tag_lock(*args, **kwargs)
+
+    with (
+        mock.patch.object(Tag.objects, "select_for_update", side_effect=record_tag_lock),
+        mock.patch.object(ObjectTag.objects, "select_for_update", side_effect=record_duplicate_check),
+    ):
+        associate_competency_criterion(tag_id=tag.id, object_id=usage_key(course_run, "p1"), group_id=group_id)
+
+    assert events[:2] == ["tag lock", "duplicate check"]
 
 
 def test_associate_competency_criterion_rejects_re_targeting_the_same_group(

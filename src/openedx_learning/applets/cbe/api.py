@@ -212,6 +212,33 @@ def create_competency_criterion(
     )
 
 
+def _reject_duplicate_criterion(tag: Tag, object_id: str, group_id: int | None) -> None:
+    """
+    Raise ValidationError if ``object_id`` is already associated with ``tag`` (in ``group_id``, when supplied).
+
+    Must run inside a transaction holding the tag row lock.
+    """
+    assert tag.taxonomy_id is not None  # narrowing for mypy; callers resolve competency tags only
+    # Locking reads, so a duplicate committed by a concurrent request is seen under MySQL REPEATABLE READ.
+    existing_object_tag = ObjectTag.objects.select_for_update().filter(
+        object_id=object_id, taxonomy_id=tag.taxonomy_id, tag_id=tag.id,
+    ).first()
+    if existing_object_tag is None:
+        return
+    duplicate_criteria = CompetencyCriterion.objects.select_for_update().filter(object_tag=existing_object_tag)
+    if group_id is None:
+        # Can't know which group slot is intended, so any existing criterion is a duplicate.
+        if list(duplicate_criteria.values_list("pk", flat=True)[:1]):
+            raise ValidationError(
+                {"object_id": _("A CompetencyCriterion already associates this tag with this object_id.")}
+            )
+    elif list(duplicate_criteria.filter(group_id=group_id).values_list("pk", flat=True)[:1]):
+        # A different explicit group is a deliberate second association (ADR-0002), not a duplicate.
+        raise ValidationError(
+            {"group_id": _("A CompetencyCriterion already associates this tag with this object_id in this group.")}
+        )
+
+
 def associate_competency_criterion(
     tag_id: int,
     object_id: str,
@@ -250,27 +277,13 @@ def associate_competency_criterion(
     except CourseRun.DoesNotExist as exc:
         raise ValidationError({"object_id": _("No course run matches object_id's course.")}) from exc
 
-    existing_object_tag = ObjectTag.objects.filter(
-        object_id=object_id, taxonomy_id=tag.taxonomy_id, tag_id=tag.id,
-    ).first()
-    if existing_object_tag is not None:
-        duplicate_criteria = CompetencyCriterion.objects.filter(object_tag=existing_object_tag)
-        if group_id is None:
-            # Can't know which group slot is intended, so any existing criterion is a duplicate.
-            if duplicate_criteria.exists():
-                raise ValidationError(
-                    {"object_id": _("A CompetencyCriterion already associates this tag with this object_id.")}
-                )
-        elif duplicate_criteria.filter(group_id=group_id).exists():
-            # A different explicit group is a deliberate second association (ADR-0002), not a duplicate.
-            raise ValidationError(
-                {"group_id": _("A CompetencyCriterion already associates this tag with this object_id in this group.")}
-            )
-
     if group_id is not None and logic_operator is not None:
         raise ValidationError({"logic_operator": _("group_id and logic_operator cannot both be supplied.")})
 
     with transaction.atomic():
+        # Serializes concurrent callers so the duplicate check below can't be passed by two requests at once.
+        Tag.objects.select_for_update().get(pk=tag.pk)
+        _reject_duplicate_criterion(tag, object_id, group_id)
         if group_id is not None:
             group = resolve_supplied_leaf_group(group_id, tag, course_run)
         else:
