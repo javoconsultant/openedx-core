@@ -71,13 +71,13 @@ def _default_rule_profile() -> CompetencyRuleProfile:
 
 @pytest.fixture(name="staff_user")
 def _staff_user() -> UserType:
-    """A user permitted to administer instance-wide competency configuration."""
+    """A user permitted to administer taxonomies, and so every competency rule profile."""
     return UserType.objects.create(username="staff", email="staff@example.com", is_staff=True)
 
 
 @pytest.fixture(name="user")
 def _user() -> UserType:
-    """A user who may not administer competency configuration."""
+    """A signed-in user who may not administer anything, as most course authors are not."""
     return UserType.objects.create(username="user", email="user@example.com")
 
 

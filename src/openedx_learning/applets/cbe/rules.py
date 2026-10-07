@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import rules
 
-from openedx_tagging.rules import UserType, is_taxonomy_admin
+from openedx_tagging.rules import UserType
 
 from .models import CompetencyRuleProfile
 
@@ -20,19 +20,24 @@ __all__ = [
 @rules.predicate
 def can_view_competency_rule_profile(
     user: UserType,
-    profile: CompetencyRuleProfile | None = None,  # pylint: disable=unused-argument
+    profile: CompetencyRuleProfile | None = None,
 ) -> bool:
     """
-    Taxonomy admins can read any competency rule profile.
+    Whoever may view a profile's taxonomy may read that profile.
 
-    The system default is instance-wide competency configuration, administered by the same
-    people who administer taxonomies, so this reuses the tagging app's notion of an
-    administrator rather than defining a second one inside CBE that could drift from it.
+    Reading competency configuration is an authoring concern, not an administrative one: the
+    Competency Management page shows each criterion's "score of X% or higher", so gating it on
+    platform staff would 403 most course authors. This is the gate the criteria tree endpoint
+    uses too, since ``oel_tagging.view_tag`` delegates to ``view_taxonomy`` as well.
 
-    ``profile`` is accepted but not consulted yet: the scoped profiles still to come will branch
-    on it and filter rows, rather than refuse a whole request in order to hide some of its rows.
+    An unscoped profile passes no taxonomy, which ``view_taxonomy`` grants to everyone; a
+    taxonomy-scoped one is as visible as its taxonomy, so a disabled taxonomy stays admin-only.
+    An anonymous caller is turned away by authentication at the endpoint, not here.
+
+    Asked through ``has_perm`` rather than by calling ``can_view_taxonomy``: openedx-platform
+    replaces that rule with an org-aware one via ``rules.set_perm``, which a direct call skips.
     """
-    return is_taxonomy_admin(user)
+    return user.has_perm("oel_tagging.view_taxonomy", profile.competency_taxonomy if profile else None)
 
 
 rules.add_perm("openedx_learning.view_competencyruleprofile", can_view_competency_rule_profile)

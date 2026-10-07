@@ -217,18 +217,22 @@ def test_profiles_arrive_in_the_same_order_every_time(
     "user_fixture, expected_status",
     [
         (None, status.HTTP_401_UNAUTHORIZED),
-        ("user", status.HTTP_403_FORBIDDEN),
+        ("user", status.HTTP_200_OK),
         ("staff_user", status.HTTP_200_OK),
     ],
 )
-def test_only_a_competency_administrator_may_read_the_collection(
+def test_any_signed_in_caller_may_read_the_collection(
     request: pytest.FixtureRequest,
     api_client: APIClient,
     default_rule_profile: CompetencyRuleProfile,
     user_fixture: str | None,
     expected_status: int,
 ) -> None:
-    """An unidentified caller and an unpermitted one are both refused, and get no profile."""
+    """
+    A course author who is not platform staff reads the instance-wide default, which is what
+    the Competency Management page depends on; an unidentified caller is refused and gets no
+    profile.
+    """
     if user_fixture is not None:
         api_client.force_authenticate(user=request.getfixturevalue(user_fixture))
 

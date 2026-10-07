@@ -22,8 +22,8 @@ class CompetencyRuleProfileView(mixins.ListModelMixin, GenericViewSet):
     """
     Read the rule profiles this instance defines.
 
-    ``GET api/cbe/v1/rule_profiles/`` lists them to callers who may administer competency
-    configuration, paginated by ``page`` and ``page_size``.
+    ``GET api/cbe/v1/rule_profiles/`` lists them to any signed-in caller, paginated by ``page``
+    and ``page_size``; ``can_view_competency_rule_profile`` holds the gate.
 
     UNSTABLE: the rule profile family is incomplete, so the create, update, and archive
     endpoints still to come may change this shape without a deprecation cycle.
