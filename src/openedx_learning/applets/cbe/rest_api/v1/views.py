@@ -178,6 +178,11 @@ class CompetencyCriteriaGroupDetailView(generics.GenericAPIView):
 
     def patch(self, request, tag_id: int, group_id: int):
         """Check the body against the stored group, then delegate to the public API."""
+        # Same 404 the create and tree endpoints give a tag that isn't a competency, ahead of the body checks.
+        try:
+            resolve_competency_tag(tag_id)
+        except Tag.DoesNotExist as exc:
+            raise NotFound(str(exc)) from exc
         # Scoped by tag_id, so addressing a group under a competency it doesn't belong to is a 404.
         group = get_object_or_404(
             CompetencyCriteriaGroup.objects.select_related("course"), pk=group_id, tag_id=tag_id,
