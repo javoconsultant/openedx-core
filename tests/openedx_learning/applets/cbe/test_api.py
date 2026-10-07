@@ -819,6 +819,62 @@ def test_update_rejects_a_root_group_before_checking_permission(
     assert stored(root) == before
 
 
+def test_update_does_not_mistake_a_course_less_child_of_the_root_for_a_root(
+    checked_object_ids: list[str], tag: Tag, leaf: CompetencyCriteriaGroup, user: UserType,
+) -> None:
+    """
+    A group with a parent is no root, even with no course of its own and none above it.
+
+    The model and ADR-0002 allow such a group, but with no course anywhere above it there's nothing to check
+    permission against. So it's refused, for that reason and not as a root, before any permission check or write.
+    """
+    course_less = CompetencyCriteriaGroup.objects.create(
+        tag=tag, parent=root_of(leaf), logic_operator=LogicOperator.AND,
+    )
+    before = stored(course_less)
+
+    with pytest.raises(ValidationError, match="no course") as exc_info:
+        update_competency_criteria_group(course_less.id, logic_operator=LogicOperator.OR, user=user)
+
+    assert "root" not in str(exc_info.value)
+    assert "group_id" in exc_info.value.message_dict
+    assert not checked_object_ids
+    assert stored(course_less) == before
+
+
+def test_update_resolves_the_course_of_a_group_nested_below_a_leaf(
+    checked_object_ids: list[str], leaf: CompetencyCriteriaGroup, user: UserType, course_run: CourseRun,
+) -> None:
+    """ADR-0002 supports deeply nested groups, so one below a leaf takes the course of its nearest ancestor with one."""
+    nested = CompetencyCriteriaGroup.objects.create(tag=leaf.tag, parent=leaf, logic_operator=LogicOperator.OR)
+
+    result = update_competency_criteria_group(nested.id, logic_operator=LogicOperator.AND, user=user)
+
+    assert result.logic_operator == LogicOperator.AND
+    nested.refresh_from_db()
+    assert nested.logic_operator == LogicOperator.AND
+    assert checked_object_ids == [str(course_run.course_key)]
+
+
+def test_update_404s_for_a_group_whose_tag_is_not_on_a_competency_taxonomy(
+    checked_object_ids: list[str], course_run: CourseRun, user: UserType,
+) -> None:
+    """A group under any other kind of taxonomy isn't a competency's group, so it's missing, and nothing changes."""
+    plain_tag = Tag.objects.create(taxonomy=Taxonomy.objects.create(name="Plain Tags", export_id="plain-v1"), value="x")
+    root = CompetencyCriteriaGroup.objects.create(tag=plain_tag, parent=None)
+    # Shaped like any editable group, so only its taxonomy sets it apart.
+    course_level = CompetencyCriteriaGroup.objects.create(
+        tag=plain_tag, course=course_run, parent=root, logic_operator=LogicOperator.AND,
+    )
+    before = stored(course_level)
+
+    with pytest.raises(Http404):
+        update_competency_criteria_group(course_level.id, logic_operator=LogicOperator.OR, user=user)
+
+    assert not checked_object_ids
+    assert stored(course_level) == before
+
+
 def test_update_404s_for_a_group_that_does_not_exist(user: UserType) -> None:
     """An unknown group id is a missing resource."""
     with pytest.raises(Http404):

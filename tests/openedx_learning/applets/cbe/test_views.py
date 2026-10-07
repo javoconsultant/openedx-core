@@ -980,6 +980,62 @@ def test_update_root_group_is_400(user_client: APIClient, tag: Tag, course_level
     assert stored_group(root) == before
 
 
+def test_update_course_less_child_of_the_root_is_400_but_not_as_a_root(
+    user_client: APIClient, tag: Tag, course_level: CompetencyCriteriaGroup,
+) -> None:
+    """A group with a parent but no course anywhere above it is refused for having no course, not as a root."""
+    root = course_level.parent
+    assert root is not None
+    course_less = CompetencyCriteriaGroup.objects.create(tag=tag, parent=root, logic_operator=LogicOperator.AND)
+    before = stored_group(course_less)
+
+    response = user_client.patch(
+        group_detail_url(tag.id, course_less.id), {"logic_operator": LogicOperator.OR}, format="json",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "no course" in str(response.data["group_id"])
+    assert "root" not in str(response.data["group_id"])
+    assert stored_group(course_less) == before
+
+
+def test_update_group_nested_below_a_leaf_is_200(
+    user_client: APIClient, tag: Tag, leaf: CompetencyCriteriaGroup,
+) -> None:
+    """A group nested below a leaf is editable, its course coming from the nearest ancestor that has one."""
+    nested = CompetencyCriteriaGroup.objects.create(tag=tag, parent=leaf, logic_operator=LogicOperator.OR)
+
+    response = user_client.patch(
+        group_detail_url(tag.id, nested.id), {"logic_operator": LogicOperator.AND}, format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["logic_operator"] == LogicOperator.AND
+
+
+def test_update_group_under_a_tag_that_is_not_a_competency_is_404(
+    user_client: APIClient, course_run: CourseRun,
+) -> None:
+    """A group under a non-competency taxonomy is a missing resource, and it is unchanged."""
+    plain_tag = Tag.objects.create(taxonomy=Taxonomy.objects.create(name="Plain Tags", export_id="plain-v1"), value="x")
+    root = CompetencyCriteriaGroup.objects.create(tag=plain_tag, parent=None)
+    # Shaped like any editable group, so only its taxonomy sets it apart.
+    course_level = CompetencyCriteriaGroup.objects.create(
+        tag=plain_tag, course=course_run, parent=root, logic_operator=LogicOperator.AND,
+    )
+    before = stored_group(course_level)
+
+    # The mismatched name would be a 400 if the body were checked before the tag, as it isn't on the other endpoints.
+    response = user_client.patch(
+        group_detail_url(plain_tag.id, course_level.id),
+        {"logic_operator": LogicOperator.OR, "name": "Renamed"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert stored_group(course_level) == before
+
+
 def test_update_group_addressed_under_another_competency_is_404(
     user_client: APIClient, competency_taxonomy: CompetencyTaxonomy, course_level: CompetencyCriteriaGroup,
 ) -> None:
