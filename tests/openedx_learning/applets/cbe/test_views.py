@@ -228,11 +228,6 @@ def test_any_signed_in_caller_may_read_the_collection(
     user_fixture: str | None,
     expected_status: int,
 ) -> None:
-    """
-    A course author who is not platform staff reads the instance-wide default, which is what
-    the Competency Management page depends on; an unidentified caller is refused and gets no
-    profile.
-    """
     if user_fixture is not None:
         api_client.force_authenticate(user=request.getfixturevalue(user_fixture))
 

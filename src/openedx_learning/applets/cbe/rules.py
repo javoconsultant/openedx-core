@@ -25,14 +25,12 @@ def can_view_competency_rule_profile(
     """
     Whoever may view a profile's taxonomy may read that profile.
 
-    Reading competency configuration is an authoring concern, not an administrative one: the
-    Competency Management page shows each criterion's "score of X% or higher", so gating it on
-    platform staff would 403 most course authors. This is the gate the criteria tree endpoint
-    uses too, since ``oel_tagging.view_tag`` delegates to ``view_taxonomy`` as well.
+    Course authors, not only platform staff, need to read this. This is the gate the criteria
+    tree endpoint uses too, since ``oel_tagging.view_tag`` delegates to ``view_taxonomy`` as well.
 
     An unscoped profile passes no taxonomy, which ``view_taxonomy`` grants to everyone; a
     taxonomy-scoped one is as visible as its taxonomy, so a disabled taxonomy stays admin-only.
-    An anonymous caller is turned away by authentication at the endpoint, not here.
+    The endpoint refuses an anonymous caller before this predicate is asked.
 
     Asked through ``has_perm`` rather than by calling ``can_view_taxonomy``: openedx-platform
     replaces that rule with an org-aware one via ``rules.set_perm``, which a direct call skips.
