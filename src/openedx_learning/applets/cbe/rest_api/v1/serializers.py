@@ -3,6 +3,9 @@ Serializers for the CBE REST API, v1.
 """
 from __future__ import annotations
 
+from django.utils.translation import gettext_lazy as _
+from opaque_keys import InvalidKeyError
+from opaque_keys.edx.keys import UsageKey
 from rest_framework import serializers
 
 from ...models import CompetencyCriterion, CompetencyRuleProfile, LogicOperator
@@ -87,3 +90,12 @@ class CompetencyCriterionSerializer(serializers.ModelSerializer):
             "rule_profile_id", "rule_type_override", "rule_payload_override", "object_tag_id",
         ]
         read_only_fields = ["id", "object_tag_id"]
+
+    def validate_object_id(self, value: str) -> str:
+        """Reject an object_id that isn't a parseable usage key."""
+        # Checked before the view's permission check, which denies an unparseable key as a 403 rather than a 400.
+        try:
+            UsageKey.from_string(value)
+        except InvalidKeyError as exc:
+            raise serializers.ValidationError(_("object_id is not a valid usage key.")) from exc
+        return value

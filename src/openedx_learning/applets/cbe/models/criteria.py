@@ -119,7 +119,7 @@ class CompetencyCriteriaGroup(models.Model):
         # ordering): a child group cannot be saved until its parent's primary key exists, so
         # neither has a single-row state to check at save time. See ADR-0002 Decision 2.
         constraints = [
-            # Backstops create_leaf_group()'s get_or_create() for course-level groups. It has no
+            # Backstops _create_leaf_group()'s get_or_create() for course-level groups. It has no
             # `condition` because MySQL has no partial indexes: a unique index allows repeated
             # NULLs, and `course` is NULL for roots and leaves.
             models.UniqueConstraint(

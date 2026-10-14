@@ -6,8 +6,6 @@ from __future__ import annotations
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import QuerySet
-from django.http import Http404
-from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext_lazy as _
 from opaque_keys import InvalidKeyError
 from opaque_keys.edx.keys import UsageKey
@@ -32,7 +30,6 @@ __all__ = [
     "get_competency_rule_profiles",
     "is_competency_taxonomy",
     "resolve_competency_tag",
-    "create_leaf_group",
     "resolve_supplied_leaf_group",
     "select_competency_taxonomies",
 ]
@@ -105,17 +102,21 @@ def resolve_competency_tag(tag_id: int) -> Tag:
     """
     Return the competency Tag identified by ``tag_id``.
 
-    Raises Http404 if no such Tag exists, or if it isn't on a CompetencyTaxonomy. Shared by
-    the view and :func:`associate_competency_criterion` so both agree on what counts as valid.
+    UNSTABLE: the criteria-authoring family is incomplete, so its validation and group update
+    and archive behavior may change this function's shape without a deprecation cycle.
+
+    Raises Tag.DoesNotExist if no such Tag exists, or if it isn't on a CompetencyTaxonomy.
+    Shared by the view and :func:`associate_competency_criterion` so both agree on what counts
+    as valid.
     """
-    tag = get_object_or_404(Tag, pk=tag_id)
-    # Explicit None check narrows the type for mypy and gives a precise 404 reason.
+    tag = Tag.objects.get(pk=tag_id)
+    # Explicit None check narrows the type for mypy.
     if tag.taxonomy is None or not is_competency_taxonomy(tag.taxonomy):
-        raise Http404("Tag is not on a CompetencyTaxonomy.")
+        raise Tag.DoesNotExist("Tag is not on a CompetencyTaxonomy.")
     return tag
 
 
-def create_leaf_group(
+def _create_leaf_group(
     tag: Tag,
     course_run: CourseRun,
     logic_operator: str | None = None,
@@ -123,40 +124,44 @@ def create_leaf_group(
     """
     Return a fresh leaf CompetencyCriteriaGroup under ``tag``'s root/course-level groups.
 
-    Gets or creates the root and course-level groups (race-safe by locking ``tag``'s row), then
-    always creates a new leaf: a tag/course pair can hold more than one leaf, one per criterion.
+    Gets or creates the root and course-level groups, then always creates a new leaf: a
+    tag/course pair can hold more than one leaf, one per criterion. The root and course-level
+    group names are truncated to fit the name column; they are never shown in the UI.
+
+    Must run inside a transaction holding the tag row lock.
     """
-    with transaction.atomic():
-        # MySQL has no partial unique index to stop two concurrent requests from each creating a
-        # root for the same tag, so they are serialized on the tag row instead.
-        Tag.objects.select_for_update().get(pk=tag.pk)
-        root, _ = CompetencyCriteriaGroup.objects.get_or_create(
-            tag=tag,
-            parent=None,
-            defaults={"name": f"{tag.value} (root)"},
-        )
-        course_level_group, _ = CompetencyCriteriaGroup.objects.get_or_create(
-            tag=tag,
-            course=course_run,
-            parent=root,
-            defaults={"name": f"{tag.value} — {course_run.title}"},
-        )
-        return CompetencyCriteriaGroup.objects.create(
-            tag=tag,
-            course=None,
-            parent=course_level_group,
-            logic_operator=logic_operator or LogicOperator.OR,
-        )
+    name_max_length = CompetencyCriteriaGroup._meta.get_field("name").max_length
+    root, _ = CompetencyCriteriaGroup.objects.get_or_create(
+        tag=tag,
+        parent=None,
+        defaults={"name": f"{tag.value} (root)"[:name_max_length]},
+    )
+    course_level_group, _ = CompetencyCriteriaGroup.objects.get_or_create(
+        tag=tag,
+        course=course_run,
+        parent=root,
+        defaults={"name": f"{tag.value} — {course_run.title}"[:name_max_length]},
+    )
+    return CompetencyCriteriaGroup.objects.create(
+        tag=tag,
+        course=None,
+        parent=course_level_group,
+        logic_operator=logic_operator or LogicOperator.OR,
+    )
 
 
 def resolve_supplied_leaf_group(group_id: int, tag: Tag, course_run: CourseRun) -> CompetencyCriteriaGroup:
     """
     Return the CompetencyCriteriaGroup identified by ``group_id``, validated as a usable leaf.
 
-    Raises Http404 if it doesn't exist, or ValidationError (keyed "group_id") if it isn't a
-    leaf, doesn't belong to ``tag``, or its course doesn't match ``course_run``.
+    UNSTABLE: the criteria-authoring family is incomplete, so its validation and group update
+    and archive behavior may change this function's shape without a deprecation cycle.
+
+    Raises CompetencyCriteriaGroup.DoesNotExist if it doesn't exist, or ValidationError (keyed
+    "group_id") if it isn't a leaf, doesn't belong to ``tag``, or its course doesn't match
+    ``course_run``.
     """
-    group = get_object_or_404(CompetencyCriteriaGroup, pk=group_id)
+    group = CompetencyCriteriaGroup.objects.get(pk=group_id)
     if group.parent_id is None or group.course_id is not None:
         raise ValidationError({"group_id": _("group_id must reference a leaf CompetencyCriteriaGroup.")})
     if group.tag_id != tag.id:
@@ -176,13 +181,19 @@ def create_competency_criterion(
     """
     Create and return a CompetencyCriterion under ``group``, tagging ``object_id`` along the way.
 
+    UNSTABLE: the criteria-authoring family is incomplete, so its validation and group update
+    and archive behavior may change this function's shape without a deprecation cycle.
+
     ``tag_object()`` replaces an object's full tag list for a taxonomy rather than appending, so
     this reads the object's existing tags first and unions in the new one, rather than silently
-    dropping a sibling competency's tag under the same taxonomy.
+    dropping a sibling competency's tag under the same taxonomy. Raises ValidationError (keyed
+    "object_id") when the taxonomy refuses the tag, e.g. it allows only one tag per object.
 
-    When no rule fields are supplied, resolves to the seeded system-default CompetencyRuleProfile
-    rather than persisting null: ADR-0002 Decision 4 always resolves to a concrete profile, and
-    the model's own xor-override constraint forbids leaving all three fields null.
+    When no rule fields are supplied, resolves to the live profile scoped to the tag's taxonomy,
+    else the live system default, rather than persisting null: ADR-0002 Decision 4 always
+    resolves to a concrete profile, and the model's own xor-override constraint forbids leaving
+    all three fields null. Course- and organization-scoped profiles are not resolved here, since
+    a criterion is authored at taxonomy scope.
     """
     tag = group.tag
     # tag.taxonomy_id is nullable at the model level; already guaranteed set by the caller.
@@ -190,18 +201,21 @@ def create_competency_criterion(
     existing_values = [existing_tag.value for existing_tag in get_object_tags(object_id, taxonomy_id=tag.taxonomy_id)]
     if tag.value not in existing_values:
         existing_values.append(tag.value)
-    tag_object(object_id, tag.taxonomy, existing_values)
+    try:
+        tag_object(object_id, tag.taxonomy, existing_values)
+    except ValueError as exc:
+        raise ValidationError({"object_id": str(exc)}) from exc
     object_tag = ObjectTag.objects.get(object_id=object_id, taxonomy_id=tag.taxonomy_id, tag_id=tag.id)
 
     if rule_profile_id is None and rule_type_override is None and rule_payload_override is None:
-        rule_profile_id = CompetencyRuleProfile.objects.get(
-            organization__isnull=True,
-            course__isnull=True,
-            competency_taxonomy__isnull=True,
-            archived=False,
-        ).id
+        live = CompetencyRuleProfile.objects.filter(archived=False, organization__isnull=True, course__isnull=True)
+        # CompetencyTaxonomy shares its pk with its parent Taxonomy row.
+        profile = live.filter(competency_taxonomy_id=tag.taxonomy_id).first() or live.get(
+            competency_taxonomy__isnull=True
+        )
+        rule_profile_id = profile.id
 
-    # #666 inserts its parent-competency dominance/containment check here, before creation.
+    # Parent-competency dominance/containment validation belongs here, before creation.
 
     return CompetencyCriterion.objects.create(
         group=group,
@@ -219,24 +233,52 @@ def _reject_duplicate_criterion(tag: Tag, object_id: str, group_id: int | None) 
     Must run inside a transaction holding the tag row lock.
     """
     assert tag.taxonomy_id is not None  # narrowing for mypy; callers resolve competency tags only
-    # Locking reads, so a duplicate committed by a concurrent request is seen under MySQL REPEATABLE READ.
-    existing_object_tag = ObjectTag.objects.select_for_update().filter(
+    existing_object_tag = ObjectTag.objects.filter(
         object_id=object_id, taxonomy_id=tag.taxonomy_id, tag_id=tag.id,
     ).first()
     if existing_object_tag is None:
         return
-    duplicate_criteria = CompetencyCriterion.objects.select_for_update().filter(object_tag=existing_object_tag)
+    duplicate_criteria = CompetencyCriterion.objects.filter(object_tag=existing_object_tag)
     if group_id is None:
         # Can't know which group slot is intended, so any existing criterion is a duplicate.
-        if list(duplicate_criteria.values_list("pk", flat=True)[:1]):
+        if duplicate_criteria.exists():
             raise ValidationError(
                 {"object_id": _("A CompetencyCriterion already associates this tag with this object_id.")}
             )
-    elif list(duplicate_criteria.filter(group_id=group_id).values_list("pk", flat=True)[:1]):
+    elif duplicate_criteria.filter(group_id=group_id).exists():
         # A different explicit group is a deliberate second association (ADR-0002), not a duplicate.
         raise ValidationError(
             {"group_id": _("A CompetencyCriterion already associates this tag with this object_id in this group.")}
         )
+
+
+def _validate_rule_fields(
+    rule_profile_id: int | None,
+    rule_type_override: str | None,
+    rule_payload_override: dict | None,
+) -> None:
+    """
+    Raise ValidationError, keyed by the offending field, unless the rule fields form a valid combination.
+
+    Valid: a live ``rule_profile_id`` alone, both overrides without a profile, or none of the three.
+    """
+    if rule_profile_id is not None and (rule_type_override is not None or rule_payload_override is not None):
+        raise ValidationError({"rule_profile_id": _(
+            "rule_profile_id cannot be combined with rule_type_override or rule_payload_override."
+        )})
+    if (rule_type_override is None) != (rule_payload_override is None):
+        supplied_field = "rule_type_override" if rule_type_override is not None else "rule_payload_override"
+        raise ValidationError({supplied_field: _(
+            "rule_type_override and rule_payload_override must be supplied together."
+        )})
+    if rule_profile_id is None:
+        return
+    archived = CompetencyRuleProfile.objects.filter(pk=rule_profile_id).values_list("archived", flat=True).first()
+    if archived is None:
+        raise ValidationError({"rule_profile_id": _("No CompetencyRuleProfile matches rule_profile_id.")})
+    if archived:
+        # Archived profiles stay resolvable for existing criteria but are hidden from new associations.
+        raise ValidationError({"rule_profile_id": _("rule_profile_id references an archived CompetencyRuleProfile.")})
 
 
 def associate_competency_criterion(
@@ -245,14 +287,17 @@ def associate_competency_criterion(
     *,
     group_id: int | None = None,
     logic_operator: str | None = None,
-    competency_rule_profile_id: int | None = None,
+    rule_profile_id: int | None = None,
     rule_type_override: str | None = None,
     rule_payload_override: dict | None = None,
 ) -> CompetencyCriterion:
     """
     Associate ``object_id`` with the competency ``tag_id`` names, creating a criterion for it.
 
-    The public entry point for #665's create-criterion endpoint; the caller is expected to have
+    UNSTABLE: the criteria-authoring family is incomplete, so its validation and group update
+    and archive behavior may change this function's shape without a deprecation cycle.
+
+    The public entry point for the create-criterion endpoint; the caller is expected to have
     already checked ``oel_tagging.can_tag_object``. Rejects re-targeting the same group a
     (tag_id, object_id) pair already uses, and rejects a duplicate via the derive-or-create
     path; a *different* explicit group is a deliberate second association per ADR-0002, not a
@@ -260,8 +305,10 @@ def associate_competency_criterion(
     criterion, all inside one transaction so a downstream failure rolls back any group just
     created.
 
-    Raises ValidationError (never DRF's) on rejected input, Http404 if tag_id/group_id don't
-    resolve.
+    Raises ValidationError (never DRF's) on rejected input, including an invalid combination of
+    rule fields or a missing or archived ``rule_profile_id``; Tag.DoesNotExist if ``tag_id``
+    doesn't resolve to a competency tag; CompetencyCriteriaGroup.DoesNotExist if ``group_id``
+    doesn't resolve.
     """
     tag = resolve_competency_tag(tag_id)
     # tag.taxonomy is already confirmed set; re-asserted since that doesn't cross function boundaries for mypy.
@@ -279,19 +326,20 @@ def associate_competency_criterion(
 
     if group_id is not None and logic_operator is not None:
         raise ValidationError({"logic_operator": _("group_id and logic_operator cannot both be supplied.")})
+    _validate_rule_fields(rule_profile_id, rule_type_override, rule_payload_override)
 
     with transaction.atomic():
-        # Serializes concurrent callers so the duplicate check below can't be passed by two requests at once.
+        # Serializes the duplicate check and root creation; MySQL has no partial unique index for one root per tag.
         Tag.objects.select_for_update().get(pk=tag.pk)
         _reject_duplicate_criterion(tag, object_id, group_id)
         if group_id is not None:
             group = resolve_supplied_leaf_group(group_id, tag, course_run)
         else:
-            group = create_leaf_group(tag, course_run, logic_operator)
+            group = _create_leaf_group(tag, course_run, logic_operator)
         return create_competency_criterion(
             group=group,
             object_id=object_id,
-            rule_profile_id=competency_rule_profile_id,
+            rule_profile_id=rule_profile_id,
             rule_type_override=rule_type_override,
             rule_payload_override=rule_payload_override,
         )

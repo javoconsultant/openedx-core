@@ -10,16 +10,17 @@ from edx_rest_framework_extensions.auth.session.authentication import (  # type:
     SessionAuthenticationAllowInactiveUser,
 )
 from rest_framework import generics, mixins, status
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from openedx_tagging.models import Tag
 from openedx_tagging.rules import ObjectTagPermissionItem
 
 from ...api import associate_competency_criterion, get_competency_rule_profiles, resolve_competency_tag
-from ...models import CompetencyRuleProfile
+from ...models import CompetencyCriteriaGroup, CompetencyRuleProfile
 from ..paginators import CompetencyRuleProfilePagination
 from .permissions import CompetencyRuleProfilePermissions
 from .serializers import CompetencyCriterionSerializer, CompetencyRuleProfileSerializer
@@ -81,7 +82,10 @@ class CompetencyCriterionCreateView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        tag = resolve_competency_tag(self.kwargs["tag_id"])
+        try:
+            tag = resolve_competency_tag(self.kwargs["tag_id"])
+        except Tag.DoesNotExist as exc:
+            raise NotFound() from exc
         perm_obj = ObjectTagPermissionItem(taxonomy=tag.taxonomy, object_id=data["object_id"])
         if not request.user.has_perm("oel_tagging.can_tag_object", perm_obj):
             raise PermissionDenied()
@@ -91,10 +95,12 @@ class CompetencyCriterionCreateView(generics.CreateAPIView):
                 object_id=data["object_id"],
                 group_id=data.get("group_id"),
                 logic_operator=data.get("logic_operator"),
-                competency_rule_profile_id=data.get("rule_profile_id"),
+                rule_profile_id=data.get("rule_profile_id"),
                 rule_type_override=data.get("rule_type_override"),
                 rule_payload_override=data.get("rule_payload_override"),
             )
+        except (Tag.DoesNotExist, CompetencyCriteriaGroup.DoesNotExist) as exc:
+            raise NotFound() from exc
         except DjangoValidationError as exc:
             raise DRFValidationError(exc.message_dict if hasattr(exc, "message_dict") else exc.messages) from exc
         return Response(self.get_serializer(criterion).data, status=status.HTTP_201_CREATED)
